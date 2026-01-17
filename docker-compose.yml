@@ -1,0 +1,105 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: shop_postgres
+    environment:
+      POSTGRES_DB: shop_db
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: md5
+    command: ["postgres", "-c", "password_encryption=md5"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d shop_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8.4-alpine
+    container_name: shop_redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  generator:
+    build: ./generator
+    container_name: shop_generator
+    environment:
+      DB_HOST: db
+      POSTGRES_DB: shop_db
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    depends_on:
+      redash_install:
+        condition: service_completed_successfully
+
+  redash_install:
+    image: redash/redash:25.8.0
+    command: python manage.py database create_tables
+    working_dir: /app
+    environment:
+      - REDASH_DATABASE_URL=postgresql://admin:password@db/shop_db
+      - REDASH_REDIS_URL=redis://redis:6379/0
+      - REDASH_SECRET_KEY=super-secret-key
+      - REDASH_COOKIE_SECRET=super-secret-key
+    depends_on:
+      db:
+        condition: service_healthy
+
+  redash:
+    image: redash/redash:25.8.0
+    container_name: shop_redash
+    command: server
+    working_dir: /app
+    ports:
+      - "5000:5000"
+    environment: &redash_env
+      PYTHONUNBUFFERED: 1
+      REDASH_LOG_LEVEL: "INFO"
+      REDASH_REDIS_URL: "redis://redis:6379/0"
+      REDASH_DATABASE_URL: "postgresql://admin:password@db/shop_db"
+      REDASH_SECRET_KEY: "super-secret-key"
+      REDASH_COOKIE_SECRET: "super-secret-key"
+    depends_on:
+      redash_install:
+        condition: service_completed_successfully
+
+  redash_scheduler:
+    image: redash/redash:25.8.0
+    container_name: shop_redash_scheduler
+    command: scheduler
+    healthcheck:
+      disable: true
+    environment: *redash_env
+    depends_on:
+      - redash
+
+  redash_worker:
+    image: redash/redash:25.8.0
+    container_name: shop_redash_worker
+    command: worker
+    healthcheck:
+      disable: true
+    environment:
+      <<: *redash_env
+      QUEUES: "queries,scheduled_queries,schemas,default"
+      WORKERS_COUNT: 1
+    depends_on:
+      - redash
+
+  jupyter:
+    image: jupyter/scipy-notebook:latest
+    container_name: shop_jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+    environment:
+      JUPYTER_TOKEN: "easy_token"
+
+volumes:
+  postgres_data:
