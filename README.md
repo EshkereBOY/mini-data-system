@@ -71,3 +71,4 @@
 *   `city` (TEXT) — город доставки.
 
 ---
+![Дашборд Redash](redash_image.png)
